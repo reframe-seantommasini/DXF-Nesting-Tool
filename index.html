@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>DXF Auto-Nester — Reframe</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,sans-serif;background:#111214;color:#f0f0f0;min-height:100vh;padding:24px 16px}
+  .wrap{max-width:900px;margin:0 auto}
+  /* Header */
+  .header{display:flex;align-items:center;gap:14px;background:#1c1d1f;border:1px solid #2e2f32;border-radius:12px;padding:14px 20px;margin-bottom:20px}
+  .header h1{font-size:20px;font-weight:700;letter-spacing:-0.3px;color:#f0f0f0}
+  .header p{font-size:12px;font-weight:500;color:#9a9b9e;margin-top:2px}
+  /* Cards */
+  .card{background:#1c1d1f;border:1px solid #2e2f32;border-radius:10px;padding:14px 18px;margin-bottom:14px}
+  /* Sheet row */
+  .sheet-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .sheet-row label{font-size:13px;color:#9a9b9e;display:flex;align-items:center;gap:4px}
+  .sheet-row strong{font-size:13px;color:#9a9b9e}
+  input[type=text],input[type=number],select{
+    background:#252628;border:1px solid #2e2f32;border-radius:5px;
+    color:#f0f0f0;font-size:13px;padding:4px 8px;outline:none}
+  input[type=text]:focus,input[type=number]:focus,select:focus{border-color:#0DAB4A}
+  .presets{display:flex;gap:6px;margin-left:auto}
+  .preset-btn{font-size:11px;padding:3px 10px;border:1px solid #2e2f32;border-radius:5px;background:#252628;cursor:pointer;color:#9a9b9e}
+  .preset-btn:hover{background:#2e2f32}
+  /* Drop zone */
+  .dropzone{border:2px dashed #2e2f32;border-radius:10px;padding:26px 20px;text-align:center;cursor:pointer;background:#1c1d1f;margin-bottom:14px;transition:all .15s;font-size:14px}
+  .dropzone.over{border-color:#0DAB4A;background:#252628}
+  .dropzone .icon{font-size:28px;margin-bottom:4px}
+  .dropzone strong{color:#0DAB4A}
+  .dropzone span{color:#55565a}
+  /* Table */
+  .parts-table{width:100%;border-collapse:collapse;font-size:13px}
+  .parts-table th{padding:9px 14px;color:#9a9b9e;font-weight:600;font-size:12px;background:#252628;border-bottom:1px solid #2e2f32}
+  .parts-table th:first-child{text-align:left}
+  .parts-table th:not(:first-child){text-align:center}
+  .parts-table td{padding:8px 14px;border-bottom:1px solid #2e2f32;vertical-align:middle}
+  .parts-table td:not(:first-child){text-align:center}
+  .part-swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:8px;vertical-align:middle}
+  .scaled-badge{display:block;font-size:10px;color:#3DBD6E;margin-top:2px}
+  /* Warn box */
+  .warn-box{background:#1e1608;border:1px solid #4a3510;border-radius:6px;padding:6px 10px;font-size:12px;color:#e8a94a;text-align:left;min-width:190px}
+  .warn-box .warn-sub{color:#9a7a45;font-size:11px}
+  .warn-btns{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap}
+  .warn-btn{font-size:11px;padding:2px 8px;background:#2e1f08;color:#e8a94a;border:1px solid #4a3510;border-radius:4px;cursor:pointer}
+  .warn-btn-keep{font-size:11px;padding:2px 8px;background:#252628;color:#9a9b9e;border:1px solid #2e2f32;border-radius:4px;cursor:pointer}
+  /* Actions */
+  .actions{display:flex;gap:10px;margin-bottom:18px;align-items:center;flex-wrap:wrap}
+  .btn{padding:9px 20px;color:#fff;border:none;border-radius:7px;font-weight:600;font-size:14px;cursor:pointer}
+  .btn-green{background:#0DAB4A}
+  .btn-darkgreen{background:#006129}
+  .btn-grey{background:#252628;color:#9a9b9e;border:1px solid #2e2f32}
+  .btn:hover{opacity:.88}
+  /* Bias */
+  .bias-group{display:flex;align-items:center;gap:5px}
+  .bias-btn{width:32px;height:32px;font-size:15px;border:2px solid #2e2f32;border-radius:6px;background:#252628;cursor:pointer;color:#9a9b9e}
+  .bias-btn.active{border-color:#0DAB4A;color:#0DAB4A}
+  .bias-label{font-size:12px;color:#55565a;margin-left:2px}
+  /* Alert */
+  .alert{background:#1e1608;border:1px solid #4a3510;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#e8a94a}
+  /* Preview */
+  .preview-card{background:#1c1d1f;border:1px solid #2e2f32;border-radius:10px;padding:16px}
+  .preview-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .preview-header strong{font-size:14px;color:#f0f0f0}
+  .preview-stats{display:flex;gap:20px;font-size:13px;color:#9a9b9e}
+  .svg-wrap{overflow-x:auto}
+  /* Empty */
+  .empty{text-align:center;color:#55565a;margin-top:48px;font-size:14px}
+  /* Footer */
+  .footer{text-align:center;margin-top:48px;padding-top:16px;border-top:1px solid #2e2f32}
+  .footer-inner{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:#55565a}
+  .footer-inner span b{color:#9a9b9e}
+  /* Remove btn */
+  .remove-btn{background:none;border:none;cursor:pointer;color:#ef4444;font-size:16px;padding:0;line-height:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <div class="header">
+    <svg width="34" height="34" viewBox="0 0 292 292" fill="none">
+      <path d="M265.018 111.883C269.977 116.648 268.618 124.956 262.204 127.347C243.45 134.34 223.118 138.167 201.88 138.167C150.195 138.167 103.88 115.502 72.6025 79.7042C69.2749 75.8957 69.6945 70.1347 73.3371 66.6342L138.967 3.56424C142.705 -0.0277636 148.565 -0.0277595 152.303 3.56424L265.018 111.883Z" fill="#0DAB4A"/>
+      <path d="M291.019 160.199C291.019 154.43 286.115 149.884 280.483 150.753C211.516 161.4 155.797 212.853 138.095 280.026C136.523 285.991 141.116 291.638 147.212 291.638H281.332C286.682 291.638 291.019 287.246 291.019 281.827V160.199Z" fill="#0DAB4A"/>
+      <path d="M97.6305 291.638C101.783 291.638 105.499 288.965 106.673 284.932C111.299 269.033 113.782 252.204 113.782 234.788C113.782 180.349 89.5274 131.648 51.366 99.1627C47.7255 96.0637 42.3896 96.3746 38.9399 99.6898L3.27026 133.968C1.34261 135.821 0.250977 138.394 0.250977 141.085V281.827C0.250977 287.246 4.58806 291.638 9.93812 291.638H97.6305Z" fill="#0DAB4A"/>
+    </svg>
+    <div>
+      <h1>DXF Auto-Nester</h1>
+      <p>Fablight 4500 — Nest &amp; Export Sheet Layouts</p>
+    </div>
+  </div>
+
+  <!-- Sheet settings -->
+  <div class="card">
+    <div class="sheet-row">
+      <strong>Sheet</strong>
+      <label>W <input type="text" id="sheetW" value="48" style="width:72px" inputmode="decimal"/></label>
+      <label>H <input type="text" id="sheetH" value="24" style="width:72px" inputmode="decimal"/></label>
+      <label>Gap <input type="text" id="gapInp" value="0.079" style="width:60px" inputmode="decimal"/></label>
+      <select id="unitSel">
+        <option value="in">inches</option>
+        <option value="mm">mm</option>
+      </select>
+      <div class="presets">
+        <button class="preset-btn" data-w="48" data-h="24">48×24"</button>
+        <button class="preset-btn" data-w="24" data-h="12">24×12"</button>
+        <button class="preset-btn" data-w="12" data-h="12">12×12"</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drop zone -->
+  <div class="dropzone" id="dropzone">
+    <div class="icon">📂</div>
+    <strong>Drop DXF files here</strong><span> or click to browse</span>
+    <input type="file" id="fileInput" accept=".dxf" multiple style="display:none"/>
+  </div>
+
+  <!-- Parts list -->
+  <div id="partsSection" style="display:none">
+    <div class="card" style="padding:0;overflow:hidden">
+      <table class="parts-table">
+        <thead>
+          <tr>
+            <th>Part</th>
+            <th id="sizeHeader">Size (in)</th>
+            <th>Qty</th>
+            <th>Preview</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="partsBody"></tbody>
+      </table>
+    </div>
+    <div class="actions" id="actions">
+      <button class="btn btn-green" id="nestBtn">⚡ Auto-Nest</button>
+      <div class="bias-group">
+        <button class="bias-btn active" data-bias="top-left" title="Top Left">↖</button>
+        <button class="bias-btn" data-bias="top-right" title="Top Right">↗</button>
+        <button class="bias-btn" data-bias="bottom-left" title="Bottom Left">↙</button>
+        <button class="bias-btn" data-bias="bottom-right" title="Bottom Right">↘</button>
+        <span class="bias-label">bias</span>
+      </div>
+      <button class="btn btn-darkgreen" id="exportBtn" style="display:none">⬇ Export DXF</button>
+      <button class="btn btn-grey" id="clearBtn">Clear all</button>
+    </div>
+    <div id="unplacedAlert" style="display:none" class="alert"></div>
+  </div>
+
+  <!-- Preview -->
+  <div class="preview-card" id="previewCard" style="display:none">
+    <div class="preview-header">
+      <strong>Nested Layout</strong>
+      <div class="preview-stats">
+        <span>Placed: <b id="statPlaced" style="color:#f0f0f0"></b></span>
+        <span>Efficiency: <b id="statEff"></b></span>
+      </div>
+    </div>
+    <div class="svg-wrap"><svg id="previewSvg"></svg></div>
+  </div>
+
+  <div class="empty" id="emptyMsg">Upload some DXF files to get started</div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div class="footer-inner">
+      <svg width="16" height="16" viewBox="0 0 292 292" fill="none">
+        <path d="M265.018 111.883C269.977 116.648 268.618 124.956 262.204 127.347C243.45 134.34 223.118 138.167 201.88 138.167C150.195 138.167 103.88 115.502 72.6025 79.7042C69.2749 75.8957 69.6945 70.1347 73.3371 66.6342L138.967 3.56424C142.705 -0.0277636 148.565 -0.0277595 152.303 3.56424L265.018 111.883Z" fill="#0DAB4A"/>
+        <path d="M291.019 160.199C291.019 154.43 286.115 149.884 280.483 150.753C211.516 161.4 155.797 212.853 138.095 280.026C136.523 285.991 141.116 291.638 147.212 291.638H281.332C286.682 291.638 291.019 287.246 291.019 281.827V160.199Z" fill="#0DAB4A"/>
+        <path d="M97.6305 291.638C101.783 291.638 105.499 288.965 106.673 284.932C111.299 269.033 113.782 252.204 113.782 234.788C113.782 180.349 89.5274 131.648 51.366 99.1627C47.7255 96.0637 42.3896 96.3746 38.9399 99.6898L3.27026 133.968C1.34261 135.821 0.250977 138.394 0.250977 141.085V281.827C0.250977 287.246 4.58806 291.638 9.93812 291.638H97.6305Z" fill="#0DAB4A"/>
+      </svg>
+      <span>A <b>Reframe Systems</b> Internal Tool</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+const state = {
+  parts: [],
+  nested: null,
+  bias: 'top-left',
+  unit: 'in',
+};
+
+const FILLS   = ['#1a2420','#1a2030','#2a2010','#2a1520','#1e1a2e','#2a1e10','#101e2a','#1e2a10'];
+const STROKES = ['#3DBD6E','#38bdf8','#fbbf24','#f472b6','#a78bfa','#fb923c','#22d3ee','#a3e635'];
+const INSUNITS = {1:25.4,2:304.8,4:1,5:10,6:1000};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function strToMm(v) {
+  const n = parseFloat(v);
+  if (isNaN(n)) return 0;
+  return state.unit === 'in' ? n * 25.4 : n;
+}
+function mmToDisp(v) {
+  return state.unit === 'in' ? (v / 25.4).toFixed(3) : v.toFixed(1);
+}
+function getSheetW() { return strToMm(document.getElementById('sheetW').value); }
+function getSheetH() { return strToMm(document.getElementById('sheetH').value); }
+function getGap()    { return strToMm(document.getElementById('gapInp').value); }
+
+// ── DXF Parser ────────────────────────────────────────────────────────────────
+function parseDXF(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim());
+  const entities = [];
+  let i=0, inEnt=false, inHdr=false, lastVar='', insunits=4;
+  while (i < lines.length - 1) {
+    const code = lines[i++], val = lines[i++];
+    if (code==='2' && val==='HEADER')   { inHdr=true; continue; }
+    if (code==='2' && val==='ENTITIES') { inHdr=false; inEnt=true; continue; }
+    if (code==='0' && val==='ENDSEC')   { inHdr=false; inEnt=false; continue; }
+    if (inHdr) {
+      if (code==='9') { lastVar=val; continue; }
+      if (lastVar==='$INSUNITS' && code==='70') insunits = parseInt(val)||4;
+      continue;
+    }
+    if (!inEnt || code !== '0') continue;
+    const ent = { type: val, data: {} };
+    while (i < lines.length-1 && lines[i] !== '0') {
+      const gc = lines[i++], gv = lines[i++];
+      if (!ent.data[gc]) ent.data[gc] = [];
+      ent.data[gc].push(gv);
+    }
+    entities.push(ent);
+  }
+  return { entities, unitScale: INSUNITS[insunits] || 1 };
+}
+
+function toPaths(entities, us) {
+  const out = [];
+  for (const e of entities) {
+    const d = e.data;
+    const g  = k => d[k] ? parseFloat(d[k][0]) * us : 0;
+    const gR = k => d[k] ? parseFloat(d[k][0]) : 0;
+    if (e.type==='LINE') {
+      out.push({type:'line',x1:g('10'),y1:g('20'),x2:g('11'),y2:g('21')});
+    } else if (e.type==='CIRCLE') {
+      out.push({type:'circle',cx:g('10'),cy:g('20'),r:g('40')});
+    } else if (e.type==='ARC') {
+      out.push({type:'arc',cx:g('10'),cy:g('20'),r:g('40'),sa:gR('50'),ea:gR('51')});
+    } else if (e.type==='LWPOLYLINE' || e.type==='POLYLINE') {
+      const xs=(d['10']||[]).map(v=>parseFloat(v)*us);
+      const ys=(d['20']||[]).map(v=>parseFloat(v)*us);
+      const closed=d['70']&&(parseInt(d['70'][0])&1);
+      out.push({type:'polyline',pts:xs.map((x,j)=>({x,y:ys[j]})),closed:!!closed});
+    } else if (e.type==='SPLINE') {
+      const xs=(d['10']||[]).map(v=>parseFloat(v)*us);
+      const ys=(d['20']||[]).map(v=>parseFloat(v)*us);
+      out.push({type:'polyline',pts:xs.map((x,j)=>({x,y:ys[j]})),closed:false});
+    }
+  }
+  return out;
+}
+
+function getBBox(paths) {
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  const e=(x,y)=>{x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y);};
+  for (const p of paths) {
+    if (p.type==='line')     {e(p.x1,p.y1);e(p.x2,p.y2);}
+    if (p.type==='circle')   {e(p.cx-p.r,p.cy-p.r);e(p.cx+p.r,p.cy+p.r);}
+    if (p.type==='arc') {
+      const r2d=a=>a*Math.PI/180;
+      e(p.cx+p.r*Math.cos(r2d(p.sa)),p.cy+p.r*Math.sin(r2d(p.sa)));
+      e(p.cx+p.r*Math.cos(r2d(p.ea)),p.cy+p.r*Math.sin(r2d(p.ea)));
+      for (let a=Math.ceil(p.sa/90)*90;a<=p.ea;a+=90)
+        e(p.cx+p.r*Math.cos(r2d(a)),p.cy+p.r*Math.sin(r2d(a)));
+    }
+    if (p.type==='polyline') {for(const pt of p.pts)e(pt.x,pt.y);}
+  }
+  if (!isFinite(x0)) return {x:0,y:0,w:10,h:10};
+  return {x:x0,y:y0,w:Math.max(x1-x0,0.01),h:Math.max(y1-y0,0.01)};
+}
+
+function normalizePaths(paths, bb) {
+  const H = bb.h;
+  return paths.map(p => {
+    const nx = x => x - bb.x;
+    const ny = y => H - (y - bb.y);
+    if (p.type==='line')     return {...p,x1:nx(p.x1),y1:ny(p.y1),x2:nx(p.x2),y2:ny(p.y2)};
+    if (p.type==='circle')   return {...p,cx:nx(p.cx),cy:ny(p.cy)};
+    if (p.type==='arc')      return {...p,cx:nx(p.cx),cy:ny(p.cy),sa:180-p.ea,ea:180-p.sa};
+    if (p.type==='polyline') return {...p,pts:p.pts.map(pt=>({x:nx(pt.x),y:ny(pt.y)}))};
+    return p;
+  });
+}
+
+function scalePaths(paths, f) {
+  return paths.map(p => {
+    if (p.type==='line')     return {...p,x1:p.x1*f,y1:p.y1*f,x2:p.x2*f,y2:p.y2*f};
+    if (p.type==='circle')   return {...p,cx:p.cx*f,cy:p.cy*f,r:p.r*f};
+    if (p.type==='arc')      return {...p,cx:p.cx*f,cy:p.cy*f,r:p.r*f};
+    if (p.type==='polyline') return {...p,pts:p.pts.map(pt=>({x:pt.x*f,y:pt.y*f}))};
+    return p;
+  });
+}
+
+// ── Nesting ───────────────────────────────────────────────────────────────────
+function nestParts(parts, SW, SH, gap, bias) {
+  const items = [];
+  parts.forEach(p => { for (let q=0;q<p.qty;q++) items.push({...p}); });
+  items.sort((a,b) => b.w*b.h - a.w*a.h);
+  const flipX = bias==='top-right'    || bias==='bottom-right';
+  const flipY = bias==='bottom-left'  || bias==='bottom-right';
+  const W = SW-gap*2, H = SH-gap*2;
+  const spaces = [{x:0,y:0,w:W,h:H}];
+  const placed=[], unplaced=[];
+  for (const item of items) {
+    let bi=-1,bs=Infinity,br=false;
+    spaces.forEach((s,si) => {
+      if (item.w+gap<=s.w && item.h+gap<=s.h) {
+        const sc=s.y*100000+s.x;
+        if (sc<bs){bs=sc;bi=si;br=false;}
+      }
+      if (item.h+gap<=s.w && item.w+gap<=s.h) {
+        const sc=s.y*100000+s.x-0.5;
+        if (sc<bs){bs=sc;bi=si;br=true;}
+      }
+    });
+    if (bi===-1){unplaced.push(item);continue;}
+    const s=spaces[bi];
+    const fw=br?item.h:item.w, fh=br?item.w:item.h;
+    const px=flipX?(W-s.x-fw)+gap:s.x+gap;
+    const py=flipY?(H-s.y-fh)+gap:s.y+gap;
+    placed.push({...item,px,py,fw,fh,rotated:br});
+    const right  = {x:s.x+fw+gap,y:s.y,      w:s.w-fw-gap,h:fh+gap};
+    const bottom = {x:s.x,       y:s.y+fh+gap,w:s.w,       h:s.h-fh-gap};
+    spaces.splice(bi,1);
+    if(right.w>1&&right.h>1)  spaces.push(right);
+    if(bottom.w>1&&bottom.h>1)spaces.push(bottom);
+    spaces.sort((a,b)=>a.y*100000+a.x-(b.y*100000+b.x));
+  }
+  return {placed,unplaced};
+}
+
+// ── DXF Export ────────────────────────────────────────────────────────────────
+function buildDXF(placed, SW, SH) {
+  const ln=(x1,y1,x2,y2,lay)=>
+    `0\nLINE\n8\n${lay}\n10\n${x1.toFixed(4)}\n20\n${y1.toFixed(4)}\n30\n0\n11\n${x2.toFixed(4)}\n21\n${y2.toFixed(4)}\n31\n0\n`;
+  let o='0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n';
+  o+=ln(0,0,SW,0,'SHEET')+ln(SW,0,SW,SH,'SHEET')+ln(SW,SH,0,SH,'SHEET')+ln(0,SH,0,0,'SHEET');
+  for (const item of placed) {
+    const lay=item.name.replace(/[^a-zA-Z0-9_-]/g,'_');
+    const tx=(x,y)=>item.rotated?[item.px+(item.h-y),SH-(item.py+x)]:[item.px+x,SH-(item.py+y)];
+    for (const p of item.paths) {
+      if (p.type==='line') {
+        const[ax,ay]=tx(p.x1,p.y1),[bx,by]=tx(p.x2,p.y2);o+=ln(ax,ay,bx,by,lay);
+      } else if (p.type==='circle') {
+        const[cx,cy]=tx(p.cx,p.cy);
+        o+=`0\nCIRCLE\n8\n${lay}\n10\n${cx.toFixed(4)}\n20\n${cy.toFixed(4)}\n30\n0\n40\n${p.r.toFixed(4)}\n`;
+      } else if (p.type==='arc') {
+        const[cx,cy]=tx(p.cx,p.cy);
+        const sa=item.rotated?180-p.ea-90:180-p.ea;
+        const ea=item.rotated?180-p.sa-90:180-p.sa;
+        o+=`0\nARC\n8\n${lay}\n10\n${cx.toFixed(4)}\n20\n${cy.toFixed(4)}\n30\n0\n40\n${p.r.toFixed(4)}\n50\n${sa.toFixed(4)}\n51\n${ea.toFixed(4)}\n`;
+      } else if (p.type==='polyline'&&p.pts.length>1) {
+        for(let k=0;k<p.pts.length-1;k++){
+          const[ax,ay]=tx(p.pts[k].x,p.pts[k].y),[bx,by]=tx(p.pts[k+1].x,p.pts[k+1].y);
+          o+=ln(ax,ay,bx,by,lay);
+        }
+        if(p.closed){
+          const[ax,ay]=tx(p.pts[p.pts.length-1].x,p.pts[p.pts.length-1].y),[bx,by]=tx(p.pts[0].x,p.pts[0].y);
+          o+=ln(ax,ay,bx,by,lay);
+        }
+      }
+    }
+  }
+  return o+'0\nENDSEC\n0\nEOF\n';
+}
+
+// ── SVG helpers ───────────────────────────────────────────────────────────────
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k,v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+function renderPaths(paths, w, h, ox, oy, sc, rotated, stroke, parent) {
+  const tx = (x,y) => rotated ? [(h-y+ox)*sc,(x+oy)*sc] : [(x+ox)*sc,(y+oy)*sc];
+  const s = {stroke, 'stroke-width':'0.9', fill:'none'};
+  for (const p of paths) {
+    if (p.type==='line') {
+      const[x1,y1]=tx(p.x1,p.y1),[x2,y2]=tx(p.x2,p.y2);
+      parent.appendChild(svgEl('line',{x1,y1,x2,y2,...s}));
+    } else if (p.type==='circle') {
+      const[cx,cy]=tx(p.cx,p.cy);
+      parent.appendChild(svgEl('circle',{cx,cy,r:p.r*sc,...s}));
+    } else if (p.type==='arc') {
+      const[cx,cy]=tx(p.cx,p.cy);
+      const sa=(rotated?p.sa-90:p.sa)*Math.PI/180;
+      const ea=(rotated?p.ea-90:p.ea)*Math.PI/180;
+      const r=p.r*sc;
+      const ax=cx+r*Math.cos(sa),ay=cy+r*Math.sin(sa);
+      const bx=cx+r*Math.cos(ea),by=cy+r*Math.sin(ea);
+      const lg=((ea-sa+Math.PI*2)%(Math.PI*2))>Math.PI?1:0;
+      parent.appendChild(svgEl('path',{d:`M ${ax} ${ay} A ${r} ${r} 0 ${lg} 1 ${bx} ${by}`,...s}));
+    } else if (p.type==='polyline'&&p.pts.length>1) {
+      const pts=p.pts.map(pt=>tx(pt.x,pt.y).join(',')).join(' ');
+      parent.appendChild(svgEl(p.closed?'polygon':'polyline',{points:pts,...s}));
+    }
+  }
+}
+
+function renderThumb(part) {
+  const ps=52,pb=5,ms=Math.min((ps-pb*2)/part.w,(ps-pb*2)/part.h);
+  const svg=svgEl('svg',{width:ps,height:ps,style:`display:block;background:${part.fill};border-radius:5px;border:1px solid ${part.stroke}`});
+  renderPaths(part.paths,part.w,part.h,pb/ms,pb/ms,ms,false,part.stroke,svg);
+  return svg;
+}
+
+// ── Render parts table ────────────────────────────────────────────────────────
+function renderParts() {
+  const tbody = document.getElementById('partsBody');
+  tbody.innerHTML = '';
+  document.getElementById('sizeHeader').textContent = `Size (${state.unit})`;
+
+  state.parts.forEach(p => {
+    const tr = document.createElement('tr');
+
+    // Name
+    const tdName = document.createElement('td');
+    const swatch = document.createElement('span');
+    swatch.className='part-swatch';
+    swatch.style.background=p.fill;
+    swatch.style.border=`1.5px solid ${p.stroke}`;
+    tdName.appendChild(swatch);
+    tdName.appendChild(document.createTextNode(p.name));
+    tr.appendChild(tdName);
+
+    // Size
+    const tdSize = document.createElement('td');
+    tdSize.style.fontFamily='monospace';
+    tdSize.style.color='#9a9b9e';
+    tdSize.textContent=`${mmToDisp(p.w)} × ${mmToDisp(p.h)}`;
+    if (p.scaleFactor>1) {
+      const badge=document.createElement('span');
+      badge.className='scaled-badge';
+      badge.textContent=`scaled ×${p.scaleFactor}`;
+      tdSize.appendChild(badge);
+    }
+    tr.appendChild(tdSize);
+
+    // Qty / warn
+    const tdQty = document.createElement('td');
+    if (p.suspectSmall) {
+      const box=document.createElement('div');
+      box.className='warn-box';
+      box.innerHTML=`⚠️ <strong>Looks Too Small</strong><br><span class="warn-sub">${mmToDisp(p.w)} × ${mmToDisp(p.h)} ${state.unit}</span>`;
+      const btns=document.createElement('div');
+      btns.className='warn-btns';
+      const bScale=document.createElement('button');
+      bScale.className='warn-btn';
+      bScale.textContent='×25.4 (in→mm)';
+      bScale.onclick=()=>rescalePart(p.id,25.4);
+      const bKeep=document.createElement('button');
+      bKeep.className='warn-btn-keep';
+      bKeep.textContent='Keep';
+      bKeep.onclick=()=>dismissWarn(p.id);
+      btns.appendChild(bScale);
+      btns.appendChild(bKeep);
+      box.appendChild(btns);
+      tdQty.appendChild(box);
+    } else {
+      const inp=document.createElement('input');
+      inp.type='number';inp.min=1;inp.value=p.qty;inp.style.width='54px';inp.style.textAlign='center';
+      inp.oninput=()=>{
+        p.qty=Math.max(1,parseInt(inp.value)||1);
+        state.nested=null;
+        updateExportBtn();
+      };
+      tdQty.appendChild(inp);
+    }
+    tr.appendChild(tdQty);
+
+    // Preview
+    const tdPrev=document.createElement('td');
+    tdPrev.appendChild(renderThumb(p));
+    tr.appendChild(tdPrev);
+
+    // Remove
+    const tdRm=document.createElement('td');
+    const rmBtn=document.createElement('button');
+    rmBtn.className='remove-btn';rmBtn.textContent='✕';
+    rmBtn.onclick=()=>{
+      state.parts=state.parts.filter(x=>x.id!==p.id);
+      state.nested=null;
+      render();
+    };
+    tdRm.appendChild(rmBtn);
+    tr.appendChild(tdRm);
+
+    tbody.appendChild(tr);
+  });
+}
+
+function rescalePart(id, f) {
+  const p = state.parts.find(x=>x.id===id);
+  if (!p) return;
+  const scaled=scalePaths(p.rawPaths,f);
+  const bb=getBBox(scaled);
+  p.paths=normalizePaths(scaled,bb);
+  p.w=bb.w; p.h=bb.h; p.scaleFactor=f; p.suspectSmall=false;
+  state.nested=null;
+  render();
+}
+
+function dismissWarn(id) {
+  const p=state.parts.find(x=>x.id===id);
+  if (p) { p.suspectSmall=false; render(); }
+}
+
+// ── Render preview ────────────────────────────────────────────────────────────
+function renderPreview() {
+  const card=document.getElementById('previewCard');
+  if (!state.nested) { card.style.display='none'; return; }
+  card.style.display='block';
+
+  const SW=getSheetW(), SH=getSheetH();
+  const PAD=20,MAX_W=580,MAX_H=440;
+  const sc=Math.min((MAX_W-PAD*2)/SW,(MAX_H-PAD*2)/SH);
+  const svgW=SW*sc+PAD*2, svgH=SH*sc+PAD*2;
+
+  const svg=document.getElementById('previewSvg');
+  svg.setAttribute('width',svgW);
+  svg.setAttribute('height',svgH);
+  svg.style.cssText='display:block;background:#161718;border:1px solid #2e2f32;border-radius:6px';
+  svg.innerHTML='';
+
+  // Sheet rect
+  svg.appendChild(svgEl('rect',{x:PAD,y:PAD,width:SW*sc,height:SH*sc,fill:'#1c1d1f',stroke:'#2e2f32','stroke-width':'1.5'}));
+
+  for (const item of state.nested.placed) {
+    const g=svgEl('g',{});
+    g.appendChild(svgEl('rect',{
+      x:item.px*sc+PAD,y:item.py*sc+PAD,
+      width:item.fw*sc,height:item.fh*sc,
+      fill:item.fill,stroke:item.stroke,'stroke-width':'1','fill-opacity':'0.8'
+    }));
+    renderPaths(item.paths,item.w,item.h,item.px+PAD/sc,item.py+PAD/sc,sc,item.rotated,item.stroke,g);
+    svg.appendChild(g);
+  }
+
+  const used=state.nested.placed.reduce((s,p)=>s+p.fw*p.fh,0);
+  const eff=Math.round(used/(SW*SH)*100);
+  document.getElementById('statPlaced').textContent=state.nested.placed.length;
+  const effEl=document.getElementById('statEff');
+  effEl.textContent=eff+'%';
+  effEl.style.color=eff>70?'#0DAB4A':eff>50?'#f59e0b':'#ef4444';
+
+  // Unplaced
+  const alert=document.getElementById('unplacedAlert');
+  if (state.nested.unplaced.length>0) {
+    alert.style.display='block';
+    const n=state.nested.unplaced.length;
+    alert.innerHTML=`⚠️ <strong>${n} part${n>1?'s':''} didn\'t fit</strong> — try a larger sheet or reduce quantities.`;
+  } else {
+    alert.style.display='none';
+  }
+}
+
+function updateExportBtn() {
+  document.getElementById('exportBtn').style.display=state.nested?.placed?.length?'inline-block':'none';
+}
+
+function render() {
+  const hasParts=state.parts.length>0;
+  document.getElementById('partsSection').style.display=hasParts?'block':'none';
+  document.getElementById('emptyMsg').style.display=hasParts?'none':'block';
+  if (hasParts) renderParts();
+  renderPreview();
+  updateExportBtn();
+}
+
+// ── File loading ──────────────────────────────────────────────────────────────
+async function loadFiles(files) {
+  for (const f of Array.from(files)) {
+    if (!f.name.toLowerCase().endsWith('.dxf')) continue;
+    const text=await f.text();
+    const {entities,unitScale}=parseDXF(text);
+    const raw=toPaths(entities,unitScale);
+    const bb=getBBox(raw);
+    const nrm=normalizePaths(raw,bb);
+    const idx=state.parts.length%FILLS.length;
+    state.parts.push({
+      id:Math.random().toString(36).slice(2),
+      name:f.name.replace(/\.dxf$/i,''),
+      paths:nrm, rawPaths:raw,
+      w:bb.w, h:bb.h,
+      qty:1, scaleFactor:1,
+      suspectSmall:bb.w<50.8&&bb.h<50.8,
+      fill:FILLS[idx], stroke:STROKES[idx],
+    });
+  }
+  state.nested=null;
+  render();
+}
+
+// ── Events ────────────────────────────────────────────────────────────────────
+const dz=document.getElementById('dropzone');
+dz.addEventListener('click',()=>document.getElementById('fileInput').click());
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('over');});
+dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('over');loadFiles(e.dataTransfer.files);});
+document.getElementById('fileInput').addEventListener('change',e=>loadFiles(e.target.files));
+
+document.getElementById('nestBtn').addEventListener('click',()=>{
+  state.nested=nestParts(state.parts,getSheetW(),getSheetH(),getGap(),state.bias);
+  render();
+});
+
+document.getElementById('exportBtn').addEventListener('click',()=>{
+  if (!state.nested?.placed?.length) return;
+  const dxf=buildDXF(state.nested.placed,getSheetW(),getSheetH());
+  const a=Object.assign(document.createElement('a'),{
+    href:URL.createObjectURL(new Blob([dxf],{type:'application/octet-stream'})),
+    download:'nested_sheet.dxf'
+  });
+  a.click();
+});
+
+document.getElementById('clearBtn').addEventListener('click',()=>{
+  state.parts=[]; state.nested=null; render();
+});
+
+// Bias buttons
+document.querySelectorAll('.bias-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    state.bias=btn.dataset.bias;
+    document.querySelectorAll('.bias-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    if (state.parts.length) {
+      state.nested=nestParts(state.parts,getSheetW(),getSheetH(),getGap(),state.bias);
+      render();
+    }
+  });
+});
+
+// Preset buttons
+document.querySelectorAll('.preset-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const wi=parseFloat(btn.dataset.w), hi=parseFloat(btn.dataset.h);
+    document.getElementById('sheetW').value=state.unit==='in'?wi:(wi*25.4).toFixed(1);
+    document.getElementById('sheetH').value=state.unit==='in'?hi:(hi*25.4).toFixed(1);
+    state.nested=null; render();
+  });
+});
+
+// Sheet inputs — clear nested on change
+['sheetW','sheetH','gapInp'].forEach(id=>{
+  document.getElementById(id).addEventListener('input',()=>{state.nested=null;updateExportBtn();});
+  document.getElementById(id).addEventListener('blur',ev=>{
+    const n=parseFloat(ev.target.value);
+    if (!isNaN(n)) ev.target.value=state.unit==='in'?n.toFixed(3):n.toFixed(1);
+  });
+});
+
+// Unit switcher
+document.getElementById('unitSel').addEventListener('change',ev=>{
+  const nu=ev.target.value;
+  if (nu===state.unit) return;
+  const conv=(id,dp)=>{
+    const n=parseFloat(document.getElementById(id).value)||0;
+    document.getElementById(id).value=nu==='in'?(n/25.4).toFixed(dp):(n*25.4).toFixed(dp);
+  };
+  conv('sheetW',3); conv('sheetH',3); conv('gapInp',3);
+  state.unit=nu;
+  state.nested=null;
+  render();
+});
+
+// Initial render
+render();
+</script>
+</body>
+</html>
