@@ -388,29 +388,37 @@ function nestParts(parts, SW, SH, gap, bias) {
   const spaces = [{x:0,y:0,w:W,h:H}];
   const placed=[], unplaced=[];
   for (const item of items) {
-    let bi=-1,bs=Infinity,br=false;
+    let bi=-1, bs=Infinity, br=false;
     spaces.forEach((s,si) => {
-      if (item.w+gap<=s.w && item.h+gap<=s.h) {
-        const sc=s.y*100000+s.x;
-        if (sc<bs){bs=sc;bi=si;br=false;}
-      }
-      if (item.h+gap<=s.w && item.w+gap<=s.h) {
-        const sc=s.y*100000+s.x-0.5;
-        if (sc<bs){bs=sc;bi=si;br=true;}
-      }
+      const tryFit = (fw, fh, rot) => {
+        if (fw+gap > s.w || fh+gap > s.h) return;
+        const waste = s.w*s.h - (fw+gap)*(fh+gap);
+        const yPref = flipY ? H-s.y : s.y;
+        const xPref = flipX ? W-s.x : s.x;
+        const sc = waste*1000000 + yPref*100 + xPref;
+        if (sc < bs) { bs=sc; bi=si; br=rot; }
+      };
+      tryFit(item.w, item.h, false);
+      tryFit(item.h, item.w, true);
     });
-    if (bi===-1){unplaced.push(item);continue;}
+    if (bi===-1) { unplaced.push(item); continue; }
     const s=spaces[bi];
     const fw=br?item.h:item.w, fh=br?item.w:item.h;
     const px=flipX?(W-s.x-fw)+gap:s.x+gap;
     const py=flipY?(H-s.y-fh)+gap:s.y+gap;
     placed.push({...item,px,py,fw,fh,rotated:br});
-    const right  = {x:s.x+fw+gap,y:s.y,      w:s.w-fw-gap,h:fh+gap};
-    const bottom = {x:s.x,       y:s.y+fh+gap,w:s.w,       h:s.h-fh-gap};
+    const dw=s.w-fw-gap, dh=s.h-fh-gap;
+    let right, bottom;
+    if (dw > dh) {
+      right  = {x:s.x+fw+gap, y:s.y,        w:dw,    h:s.h   };
+      bottom = {x:s.x,        y:s.y+fh+gap, w:fw+gap, h:dh   };
+    } else {
+      right  = {x:s.x+fw+gap, y:s.y,        w:dw,    h:fh+gap};
+      bottom = {x:s.x,        y:s.y+fh+gap, w:s.w,   h:dh    };
+    }
     spaces.splice(bi,1);
     if(right.w>1&&right.h>1)  spaces.push(right);
     if(bottom.w>1&&bottom.h>1)spaces.push(bottom);
-    spaces.sort((a,b)=>a.y*100000+a.x-(b.y*100000+b.x));
   }
   return {placed,unplaced};
 }
