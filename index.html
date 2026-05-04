@@ -206,53 +206,104 @@ function getGap()    { return strToMm(document.getElementById('gapInp').value); 
 // ── DXF Parser ────────────────────────────────────────────────────────────────
 function parseDXF(text) {
   const lines = text.split(/\r?\n/).map(l => l.trim());
-  const entities = [];
-  let i=0, inEnt=false, inHdr=false, lastVar='', insunits=4;
+  const entities = [], blocks = {};
+  let i=0, inEnt=false, inBlk=false, inHdr=false, lastVar='', insunits=4, curBlock=null;
+  const readEnt = (type) => {
+    const ent = { type, data: {} };
+    while (i < lines.length-1 && lines[i] !== '0') {
+      const gc=lines[i++], gv=lines[i++];
+      if (!ent.data[gc]) ent.data[gc]=[];
+      ent.data[gc].push(gv);
+    }
+    return ent;
+  };
   while (i < lines.length - 1) {
     const code = lines[i++], val = lines[i++];
     if (code==='2' && val==='HEADER')   { inHdr=true; continue; }
-    if (code==='2' && val==='ENTITIES') { inHdr=false; inEnt=true; continue; }
-    if (code==='0' && val==='ENDSEC')   { inHdr=false; inEnt=false; continue; }
+    if (code==='2' && val==='BLOCKS')   { inHdr=false; inBlk=true; continue; }
+    if (code==='2' && val==='ENTITIES') { inHdr=false; inBlk=false; inEnt=true; continue; }
+    if (code==='0' && val==='ENDSEC')   { inHdr=false; inBlk=false; inEnt=false; continue; }
     if (inHdr) {
       if (code==='9') { lastVar=val; continue; }
       if (lastVar==='$INSUNITS' && code==='70') insunits = parseInt(val)||4;
       continue;
     }
-    if (!inEnt || code !== '0') continue;
-    const ent = { type: val, data: {} };
-    while (i < lines.length-1 && lines[i] !== '0') {
-      const gc = lines[i++], gv = lines[i++];
-      if (!ent.data[gc]) ent.data[gc] = [];
-      ent.data[gc].push(gv);
+    if (inBlk) {
+      if (code==='0' && val==='BLOCK')  { curBlock=null; continue; }
+      if (code==='2' && !curBlock)      { curBlock={name:val,entities:[]}; blocks[val]=curBlock; continue; }
+      if (code==='0' && val==='ENDBLK') { curBlock=null; continue; }
+      if (!curBlock || code !== '0') continue;
+      curBlock.entities.push(readEnt(val));
+      continue;
     }
-    entities.push(ent);
+    if (!inEnt || code !== '0') continue;
+    entities.push(readEnt(val));
   }
-  return { entities, unitScale: INSUNITS[insunits] || 1 };
+  return { entities, blocks, unitScale: INSUNITS[insunits] || 1 };
 }
 
-function toPaths(entities, us) {
+function toPaths(entities, us, blocks) {
+  blocks = blocks || {};
   const out = [];
-  for (const e of entities) {
-    const d = e.data;
-    const g  = k => d[k] ? parseFloat(d[k][0]) * us : 0;
-    const gR = k => d[k] ? parseFloat(d[k][0]) : 0;
-    if (e.type==='LINE') {
-      out.push({type:'line',x1:g('10'),y1:g('20'),x2:g('11'),y2:g('21')});
-    } else if (e.type==='CIRCLE') {
-      out.push({type:'circle',cx:g('10'),cy:g('20'),r:g('40')});
-    } else if (e.type==='ARC') {
-      out.push({type:'arc',cx:g('10'),cy:g('20'),r:g('40'),sa:gR('50'),ea:gR('51')});
-    } else if (e.type==='LWPOLYLINE' || e.type==='POLYLINE') {
-      const xs=(d['10']||[]).map(v=>parseFloat(v)*us);
-      const ys=(d['20']||[]).map(v=>parseFloat(v)*us);
-      const closed=d['70']&&(parseInt(d['70'][0])&1);
-      out.push({type:'polyline',pts:xs.map((x,j)=>({x,y:ys[j]})),closed:!!closed});
-    } else if (e.type==='SPLINE') {
-      const xs=(d['10']||[]).map(v=>parseFloat(v)*us);
-      const ys=(d['20']||[]).map(v=>parseFloat(v)*us);
-      out.push({type:'polyline',pts:xs.map((x,j)=>({x,y:ys[j]})),closed:false});
+  function process(ents, ox, oy, sc, rot) {
+    let pendingPoly = null;
+    const cos=Math.cos(rot*Math.PI/180), sin=Math.sin(rot*Math.PI/180);
+    const ap = (x,y) => {
+      const rx=x*sc, ry=y*sc;
+      return [rx*cos - ry*sin + ox, rx*sin + ry*cos + oy];
+    };
+    for (const e of ents) {
+      const d = e.data;
+      const g  = k => d[k] ? parseFloat(d[k][0]) * us : 0;
+      const gR = k => d[k] ? parseFloat(d[k][0]) : 0;
+      if (e.type==='VERTEX') {
+        if (pendingPoly) { const [x,y]=ap(g('10'),g('20')); pendingPoly.pts.push({x,y}); }
+        continue;
+      }
+      if (e.type==='SEQEND') { pendingPoly=null; continue; }
+      if (e.type==='INSERT') {
+        const blk=blocks[d['2']?d['2'][0]:''];
+        if (blk) {
+          const [ix,iy]=ap(g('10'),g('20'));
+          const isc=d['41']?parseFloat(d['41'][0]):1;
+          const irot=d['50']?parseFloat(d['50'][0]):0;
+          process(blk.entities, ix, iy, sc*isc, rot+irot);
+        }
+        continue;
+      }
+      if (e.type==='LINE') {
+        const [x1,y1]=ap(g('10'),g('20')), [x2,y2]=ap(g('11'),g('21'));
+        out.push({type:'line',x1,y1,x2,y2});
+      } else if (e.type==='CIRCLE') {
+        const [cx,cy]=ap(g('10'),g('20'));
+        out.push({type:'circle',cx,cy,r:g('40')*sc});
+      } else if (e.type==='ARC') {
+        const [cx,cy]=ap(g('10'),g('20'));
+        const r=g('40')*sc, sa=gR('50')+rot, ea=gR('51')+rot;
+        const sweep=((ea-sa)%360+360)%360||360;
+        const segs=Math.max(12,Math.ceil(sweep/5));
+        const pts=[];
+        for(let k=0;k<=segs;k++){const ang=(sa+sweep*k/segs)*Math.PI/180;pts.push({x:cx+r*Math.cos(ang),y:cy+r*Math.sin(ang)});}
+        out.push({type:'polyline',pts,closed:false});
+      } else if (e.type==='LWPOLYLINE') {
+        const xs=(d['10']||[]).map(v=>parseFloat(v)*us);
+        const ys=(d['20']||[]).map(v=>parseFloat(v)*us);
+        const closed=d['70']&&(parseInt(d['70'][0])&1);
+        out.push({type:'polyline',pts:xs.map((x,j)=>{const[nx,ny]=ap(x,ys[j]);return{x:nx,y:ny};}),closed:!!closed});
+      } else if (e.type==='POLYLINE') {
+        const flags=d['70']?parseInt(d['70'][0]):0;
+        if (!(flags&(16|32|64))) { // skip 3D meshes
+          pendingPoly={type:'polyline',pts:[],closed:!!(flags&1)};
+          out.push(pendingPoly);
+        }
+      } else if (e.type==='SPLINE') {
+        const xs=(d['10']||[]).map(v=>parseFloat(v)*us);
+        const ys=(d['20']||[]).map(v=>parseFloat(v)*us);
+        out.push({type:'polyline',pts:xs.map((x,j)=>{const[nx,ny]=ap(x,ys[j]);return{x:nx,y:ny};}),closed:false});
+      }
     }
   }
+  process(entities, 0, 0, 1, 0);
   return out;
 }
 
@@ -266,7 +317,8 @@ function getBBox(paths) {
       const r2d=a=>a*Math.PI/180;
       e(p.cx+p.r*Math.cos(r2d(p.sa)),p.cy+p.r*Math.sin(r2d(p.sa)));
       e(p.cx+p.r*Math.cos(r2d(p.ea)),p.cy+p.r*Math.sin(r2d(p.ea)));
-      for (let a=Math.ceil(p.sa/90)*90;a<=p.ea;a+=90)
+      const ea=p.ea>=p.sa?p.ea:p.ea+360;
+      for (let a=Math.ceil(p.sa/90)*90;a<=ea;a+=90)
         e(p.cx+p.r*Math.cos(r2d(a)),p.cy+p.r*Math.sin(r2d(a)));
     }
     if (p.type==='polyline') {for(const pt of p.pts)e(pt.x,pt.y);}
@@ -286,6 +338,33 @@ function normalizePaths(paths, bb) {
     if (p.type==='polyline') return {...p,pts:p.pts.map(pt=>({x:nx(pt.x),y:ny(pt.y)}))};
     return p;
   });
+}
+
+function fixDisplacedClusters(paths) {
+  if (paths.length < 2) return paths;
+  const cx = p => {
+    if (p.type==='line')     return (p.x1+p.x2)/2;
+    if (p.type==='circle' || p.type==='arc') return p.cx;
+    if (p.type==='polyline') return p.pts.reduce((s,pt)=>s+pt.x,0)/p.pts.length;
+    return 0;
+  };
+  const centroids = paths.map(cx);
+  const sorted = [...centroids].sort((a,b)=>a-b);
+  const totalW = sorted[sorted.length-1] - sorted[0];
+  if (totalW < 1) return paths;
+  let maxGap=0, gapIdx=0;
+  for (let i=0;i<sorted.length-1;i++) {
+    const g=sorted[i+1]-sorted[i];
+    if (g>maxGap){maxGap=g;gapIdx=i;}
+  }
+  if (maxGap < totalW*0.3) return paths;
+  const split = (sorted[gapIdx]+sorted[gapIdx+1])/2;
+  const leftN  = centroids.filter(c=>c<=split).length;
+  const rightN = centroids.length-leftN;
+  const minorN = Math.min(leftN,rightN);
+  if (minorN/paths.length > 0.2) return paths;
+  const keepLeft = leftN > rightN;
+  return paths.filter((_,i)=>keepLeft ? centroids[i]<=split : centroids[i]>split);
 }
 
 function scalePaths(paths, f) {
@@ -406,8 +485,9 @@ function renderPaths(paths, w, h, ox, oy, sc, rotated, stroke, parent) {
 }
 
 function renderThumb(part) {
-  const ps=52,pb=5,ms=Math.min((ps-pb*2)/part.w,(ps-pb*2)/part.h);
+  const ps=80,pb=6,ms=Math.min((ps-pb*2)/part.w,(ps-pb*2)/part.h);
   const svg=svgEl('svg',{width:ps,height:ps,style:`display:block;background:${part.fill};border-radius:5px;border:1px solid ${part.stroke}`});
+  svg.appendChild(svgEl('rect',{x:pb,y:pb,width:part.w*ms,height:part.h*ms,fill:'none',stroke:part.stroke,'stroke-width':'0.7','stroke-opacity':'0.3'}));
   renderPaths(part.paths,part.w,part.h,pb/ms,pb/ms,ms,false,part.stroke,svg);
   return svg;
 }
@@ -580,8 +660,8 @@ async function loadFiles(files) {
   for (const f of Array.from(files)) {
     if (!f.name.toLowerCase().endsWith('.dxf')) continue;
     const text=await f.text();
-    const {entities,unitScale}=parseDXF(text);
-    const raw=toPaths(entities,unitScale);
+    const {entities,blocks,unitScale}=parseDXF(text);
+    const raw=fixDisplacedClusters(toPaths(entities,unitScale,blocks));
     const bb=getBBox(raw);
     const nrm=normalizePaths(raw,bb);
     const idx=state.parts.length%FILLS.length;
