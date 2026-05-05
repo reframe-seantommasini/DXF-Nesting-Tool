@@ -455,95 +455,17 @@ function rotatePoly90(poly, w, h) {
   return poly.map(pt => ({x: h-pt.y, y: pt.x}));
 }
 
-// Strict segment-segment intersection (excludes shared endpoints)
-function segsIntersect(ax,ay,bx,by,cx,cy,dx,dy) {
-  const d1x=bx-ax, d1y=by-ay, d2x=dx-cx, d2y=dy-cy;
-  const d = d1x*d2y - d1y*d2x;
-  if (Math.abs(d) < 1e-10) return false;
-  const t = ((cx-ax)*d2y - (cy-ay)*d2x) / d;
-  const u = ((cx-ax)*d1y - (cy-ay)*d1x) / d;
-  return t>1e-9 && t<1-1e-9 && u>1e-9 && u<1-1e-9;
-}
-
-// Point-in-polygon via ray casting (polygon offset by ox,oy)
-function ptInPolyOff(px, py, poly, ox, oy) {
-  let ins = false;
-  for (let i=0, j=poly.length-1; i<poly.length; j=i++) {
-    const xi=poly[i].x+ox, yi=poly[i].y+oy, xj=poly[j].x+ox, yj=poly[j].y+oy;
-    if ((yi>py) !== (yj>py) && px < (xj-xi)*(py-yi)/(yj-yi)+xi) ins = !ins;
-  }
-  return ins;
-}
-
-// True polygon-polygon overlap test (both translated by their offsets).
+// ── Corner-Point Nesting ───────────────────────────────────────────────────────
 //
-// IMPORTANT — why we use centroid for containment instead of poly[0]:
-//   If two identical polygons sit at the same offset (duplicate parts placed on
-//   top of each other), all their edges are collinear so segsIntersect returns
-//   false for every pair.  poly[0] is then a *boundary point* of the other
-//   polygon, and ray-casting is undefined/false for boundary points.
-//   The centroid is strictly interior (for convex polygons, always; for concave,
-//   almost always), so ptInPolyOff reliably returns true when one polygon
-//   completely contains or coincides with the other.
-function polysOverlap(pA, oxA, oyA, pB, oxB, oyB) {
-  // Fast path: same (or nearly same) position → must overlap
-  if (Math.abs(oxA-oxB) < 0.5 && Math.abs(oyA-oyB) < 0.5) return true;
-
-  const n=pA.length, m=pB.length;
-  // Edge vs edge
-  for (let i=0; i<n; i++) {
-    const i2=(i+1)%n, ax=pA[i].x+oxA, ay=pA[i].y+oyA, bx=pA[i2].x+oxA, by=pA[i2].y+oyA;
-    for (let j=0; j<m; j++) {
-      const j2=(j+1)%m;
-      if (segsIntersect(ax,ay,bx,by, pB[j].x+oxB,pB[j].y+oyB, pB[j2].x+oxB,pB[j2].y+oyB)) return true;
-    }
-  }
-  // Containment using polygon centroid (strictly interior — avoids boundary ambiguity)
-  let cxA=0,cyA=0, cxB=0,cyB=0;
-  for (const pt of pA) { cxA+=pt.x; cyA+=pt.y; }
-  for (const pt of pB) { cxB+=pt.x; cyB+=pt.y; }
-  cxA=cxA/n+oxA; cyA=cyA/n+oyA;
-  cxB=cxB/m+oxB; cyB=cyB/m+oyB;
-  if (ptInPolyOff(cxA, cyA, pB, oxB, oyB)) return true;
-  if (ptInPolyOff(cxB, cyB, pA, oxA, oyA)) return true;
-  return false;
-}
-
-// ── NFP-Aware Nesting ─────────────────────────────────────────────────────────
+// For each new part, the candidate placement positions are every "corner point"
+// created by the already-placed bounding boxes — i.e., every combination of:
+//   x ∈ { gap, SW-gap-fw, b.x, b.x+b.fw+gap, b.x-fw-gap  for each placed b }
+//   y ∈ { gap, SH-gap-fh, b.y, b.y+b.fh+gap, b.y-fh-gap  for each placed b }
 //
-// Strategy: vertex-based NFP approximation.
-//   The optimal placement for a new part is always where one of its vertices
-//   aligns with a vertex of the sheet boundary or an already-placed part.
-//   We generate those specific (dx,dy) pairs directly — no Cartesian product.
+// This covers all four bias corners: for top-right bias the scoring naturally
+// selects the rightmost valid x at the smallest valid y, etc.
+// Collision detection uses axis-aligned bounding boxes with the user gap — 100% reliable.
 //
-// Polygon simplification (Douglas-Peucker) is applied so arc-heavy parts
-// don't create thousands of alignment candidates.
-//
-
-function dpSimplify(pts, eps) {
-  if (pts.length <= 2) return pts;
-  const [p1, p2] = [pts[0], pts[pts.length-1]];
-  const dx = p2.x-p1.x, dy = p2.y-p1.y, len = Math.sqrt(dx*dx+dy*dy);
-  let maxD=0, maxI=0;
-  for (let i=1; i<pts.length-1; i++) {
-    const d = len>0 ? Math.abs((pts[i].y-p1.y)*dx-(pts[i].x-p1.x)*dy)/len
-                    : Math.hypot(pts[i].x-p1.x, pts[i].y-p1.y);
-    if (d>maxD) { maxD=d; maxI=i; }
-  }
-  if (maxD<=eps) return [p1, p2];
-  return dpSimplify(pts.slice(0,maxI+1),eps).slice(0,-1)
-    .concat(dpSimplify(pts.slice(maxI),eps));
-}
-
-function simplifyPoly(poly, eps) {
-  if (poly.length <= 4) return poly;
-  // Run DP on the open chain (poly[0]…poly[n-1]); the closing edge is implicit.
-  // Passing [...poly, poly[0]] to dpSimplify would make p1===p2 (same point),
-  // breaking the perpendicular-distance formula for the outermost recursion.
-  const result = dpSimplify(poly, eps);
-  return result.length >= 3 ? result : poly;
-}
-
 function nestParts(parts, SW, SH, gap, bias) {
   const items = [];
   parts.forEach(p => { for (let q=0; q<p.qty; q++) items.push({...p}); });
@@ -553,122 +475,56 @@ function nestParts(parts, SW, SH, gap, bias) {
   const flipY = bias==='bottom-left' || bias==='bottom-right';
 
   const placed=[], unplaced=[];
-  const placedPolys = []; // {poly, smpoly, ox, oy, fw, fh}  smpoly = simplified
+  const pboxes = []; // {x, y, fw, fh}  placed bounding boxes
+
+  // Returns true if (px,py)→(px+fw, py+fh) fits on the sheet with gap clearance.
+  const fits = (px, py, fw, fh) => {
+    if (px < gap || py < gap || px+fw > SW-gap || py+fh > SH-gap) return false;
+    for (const b of pboxes) {
+      if (px < b.x+b.fw+gap && b.x < px+fw+gap &&
+          py < b.y+b.fh+gap && b.y < py+fh+gap) return false;
+    }
+    return true;
+  };
 
   for (const item of items) {
-    let basePoly = getPartPolygon(item.paths);
-    if (!basePoly || basePoly.length < 3)
-      basePoly = [{x:0,y:0},{x:item.w,y:0},{x:item.w,y:item.h},{x:0,y:item.h}];
-
     let best = null;
 
     for (const rotated of [false, true]) {
-      const poly   = rotated ? rotatePoly90(basePoly, item.w, item.h) : basePoly.map(pt=>({...pt}));
-      const smpoly = simplifyPoly(poly, Math.max(gap*0.5, 1.5)); // simplified for candidate gen
-      const fw     = rotated ? item.h : item.w;
-      const fh     = rotated ? item.w : item.h;
+      const fw = rotated ? item.h : item.w;
+      const fh = rotated ? item.w : item.h;
       if (fw + gap*2 > SW || fh + gap*2 > SH) continue;
 
-      // Polygon bounding box
-      let px0=Infinity, py0=Infinity, px1=-Infinity, py1=-Infinity;
-      for (const pt of poly) { px0=Math.min(px0,pt.x); py0=Math.min(py0,pt.y); px1=Math.max(px1,pt.x); py1=Math.max(py1,pt.y); }
-
-      const minDX = gap-px0, maxDX = SW-px1-gap;
-      const minDY = gap-py0, maxDY = SH-py1-gap;
-      if (minDX > maxDX+0.01 || minDY > maxDY+0.01) continue;
-
-      // ── Generate specific (dx,dy) candidate pairs ──────────────────────────
-      // Key: never build a Cartesian product of x-set × y-set.
-      // Each candidate is an explicit (dx,dy) pair derived from a geometric contact.
-
-      const rawCands = [];
-      const addC = (dx, dy) => {
-        if (dx >= minDX-0.01 && dx <= maxDX+0.01 && dy >= minDY-0.01 && dy <= maxDY+0.01)
-          rawCands.push({dx, dy});
-      };
-
-      // Sheet-corner candidates (bias corner gets score=0)
-      addC(minDX, minDY);
-      addC(maxDX, minDY);
-      addC(minDX, maxDY);
-      addC(maxDX, maxDY);
-
-      // Each simplified new-part vertex touching each sheet edge
-      for (const ppt of smpoly) {
-        addC(gap - ppt.x,      minDY);   // vertex on left edge, nudged to top
-        addC(SW-gap - ppt.x,   minDY);   // vertex on right edge, nudged to top
-        addC(minDX, gap - ppt.y);        // vertex on top edge, nudged to left
-        addC(minDX, SH-gap - ppt.y);     // vertex on bottom edge, nudged to left
+      // Full corner-point candidate set — covers all four bias directions.
+      // Both sheet edges on each axis so right/bottom bias finds its corner.
+      // All four sides of every placed box so the new part can snug up to any face.
+      const cxs = new Set([gap, SW - gap - fw]);
+      const cys = new Set([gap, SH - gap - fh]);
+      for (const b of pboxes) {
+        cxs.add(b.x);              // align left edges
+        cxs.add(b.x + b.fw + gap); // just right of b
+        cxs.add(b.x - fw - gap);   // just left of b
+        cys.add(b.y);              // align top edges
+        cys.add(b.y + b.fh + gap); // just below b
+        cys.add(b.y - fh - gap);   // just above b
       }
 
-      for (const pd of placedPolys) {
-        // BBox-gap contacts (new part just outside placed part's bounding box)
-        const rdx = pd.ox + pd.fw + gap - px0;
-        const ldx = pd.ox - px1 - gap;
-        const bdy = pd.oy + pd.fh + gap - py0;
-        const ady = pd.oy - py1 - gap;
-        addC(rdx, minDY);          // right of placed, at top bias
-        addC(ldx, minDY);          // left of placed, at top bias
-        addC(minDX, bdy);          // below placed, at left bias
-        addC(minDX, ady);          // above placed, at left bias
-        addC(rdx, pd.oy - py0);    // right of placed, level with it
-        addC(ldx, pd.oy - py0);
-        addC(pd.ox - px0, bdy);    // below placed, aligned with it
-        addC(pd.ox - px0, ady);
-
-        // Vertex-vertex alignments (enables interlocking).
-        // Also try +gap offset in each cardinal direction so gap is enforced
-        // even for non-interlocking contacts (exact touch = 0-gap cut line).
-        for (const qpt of pd.smpoly) {
-          for (const ppt of smpoly) {
-            const vx = pd.ox + qpt.x - ppt.x;
-            const vy = pd.oy + qpt.y - ppt.y;
-            addC(vx,        vy);           // exact vertex-vertex (interlocking)
-            addC(vx + gap,  vy);           // gap-offset variants
-            addC(vx - gap,  vy);
-            addC(vx,        vy + gap);
-            addC(vx,        vy - gap);
-            // Gravity variants: drop/push to bias edge on one axis
-            addC(vx, minDY);
-            addC(minDX, vy);
-          }
+      for (const px of cxs) {
+        for (const py of cys) {
+          if (!fits(px, py, fw, fh)) continue;
+          // Project onto the bias corner: that corner scores 0, opposite scores max.
+          const bx = flipX ? SW-px-fw : px;
+          const by = flipY ? SH-py-fh : py;
+          const score = by*(SW+1) + bx + (rotated ? 0.001 : 0);
+          if (!best || score < best.score)
+            best = {px, py, fw, fh, rotated, score};
         }
-      }
-
-      // Deduplicate (1mm grid), score, sort
-      const seen = new Set();
-      const cands = [];
-      for (const {dx,dy} of rawCands) {
-        const key = `${Math.round(dx*2)},${Math.round(dy*2)}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const bx = flipX ? SW-dx-fw : dx;
-        const by = flipY ? SH-dy-fh : dy;
-        cands.push({dx, dy, rotated, fw, fh, poly, score: by*(SW+1)+bx});
-      }
-      cands.sort((a,b) => a.score - b.score);
-
-      // Try in score order — first collision-free position wins
-      for (const cand of cands) {
-        if (best && cand.score >= best.score) break; // all remaining are worse
-
-        // Bbox pre-check (O(1), skips polygon test for far-away placed parts)
-        let ok = true;
-        for (const pd of placedPolys) {
-          if (cand.dx+px1 < pd.ox-0.01 || cand.dx+px0 > pd.ox+pd.fw+0.01 ||
-              cand.dy+py1 < pd.oy-0.01 || cand.dy+py0 > pd.oy+pd.fh+0.01) continue;
-          if (polysOverlap(cand.poly, cand.dx, cand.dy, pd.poly, pd.ox, pd.oy)) { ok=false; break; }
-        }
-        if (ok) { best=cand; break; }
       }
     }
 
     if (best) {
-      const bp = getPartPolygon(item.paths) || [{x:0,y:0},{x:item.w,y:0},{x:item.w,y:item.h},{x:0,y:item.h}];
-      const fullPoly = best.rotated ? rotatePoly90(bp, item.w, item.h) : bp.map(pt=>({...pt}));
-      const smPoly   = simplifyPoly(fullPoly, Math.max(gap*0.5, 1.5));
-      placed.push({...item, px:best.dx, py:best.dy, fw:best.fw, fh:best.fh, rotated:best.rotated});
-      placedPolys.push({poly:fullPoly, smpoly:smPoly, ox:best.dx, oy:best.dy, fw:best.fw, fh:best.fh});
+      placed.push({...item, px:best.px, py:best.py, fw:best.fw, fh:best.fh, rotated:best.rotated});
+      pboxes.push({x:best.px, y:best.py, fw:best.fw, fh:best.fh});
     } else {
       unplaced.push(item);
     }
