@@ -377,50 +377,199 @@ function scalePaths(paths, f) {
   });
 }
 
-// ── Nesting ───────────────────────────────────────────────────────────────────
+// ── Polygon helpers (NFP nesting) ─────────────────────────────────────────────
+
+// |2 × signed area| via shoelace
+function polyArea2(pts) {
+  let a = 0;
+  for (let i=0, j=pts.length-1; i<pts.length; j=i++)
+    a += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
+  return Math.abs(a);
+}
+
+// Andrew's monotone chain convex hull
+function convexHull(pts) {
+  if (pts.length < 3) return pts.slice();
+  const s = [...pts].sort((a,b) => a.x-b.x || a.y-b.y);
+  const cr = (o,a,b) => (a.x-o.x)*(b.y-o.y) - (a.y-o.y)*(b.x-o.x);
+  const lo=[], hi=[];
+  for (const p of s) { while(lo.length>=2&&cr(lo[lo.length-2],lo[lo.length-1],p)<=0)lo.pop(); lo.push(p); }
+  for (let k=s.length-1;k>=0;k--) { const p=s[k]; while(hi.length>=2&&cr(hi[hi.length-2],hi[hi.length-1],p)<=0)hi.pop(); hi.push(p); }
+  lo.pop(); hi.pop();
+  return lo.concat(hi);
+}
+
+// Extract outer boundary polygon from normalized paths.
+// Returns [{x,y},...] or null.
+function getPartPolygon(paths) {
+  // Use largest closed polyline (outer boundary)
+  let best = null, bestA = 0;
+  for (const p of paths) {
+    if (p.type==='polyline' && p.closed && p.pts.length >= 3) {
+      const a = polyArea2(p.pts);
+      if (a > bestA) { bestA = a; best = p.pts; }
+    }
+  }
+  if (best) return best.map(pt => ({x:pt.x, y:pt.y}));
+
+  // Fallback: convex hull of all vertices
+  const pts = [];
+  for (const p of paths) {
+    if (p.type==='polyline') p.pts.forEach(pt => pts.push({x:pt.x, y:pt.y}));
+    else if (p.type==='line') { pts.push({x:p.x1,y:p.y1}); pts.push({x:p.x2,y:p.y2}); }
+    else if (p.type==='circle') {
+      for (let k=0; k<8; k++) { const a=k*Math.PI/4; pts.push({x:p.cx+p.r*Math.cos(a), y:p.cy+p.r*Math.sin(a)}); }
+    }
+  }
+  return pts.length >= 3 ? convexHull(pts) : null;
+}
+
+// 90° CW rotation in Y-down screen space: (x,y) → (h−y, x)
+function rotatePoly90(poly, w, h) {
+  return poly.map(pt => ({x: h-pt.y, y: pt.x}));
+}
+
+// Strict segment-segment intersection (excludes shared endpoints)
+function segsIntersect(ax,ay,bx,by,cx,cy,dx,dy) {
+  const d1x=bx-ax, d1y=by-ay, d2x=dx-cx, d2y=dy-cy;
+  const d = d1x*d2y - d1y*d2x;
+  if (Math.abs(d) < 1e-10) return false;
+  const t = ((cx-ax)*d2y - (cy-ay)*d2x) / d;
+  const u = ((cx-ax)*d1y - (cy-ay)*d1x) / d;
+  return t>1e-9 && t<1-1e-9 && u>1e-9 && u<1-1e-9;
+}
+
+// Point-in-polygon via ray casting (polygon offset by ox,oy)
+function ptInPolyOff(px, py, poly, ox, oy) {
+  let ins = false;
+  for (let i=0, j=poly.length-1; i<poly.length; j=i++) {
+    const xi=poly[i].x+ox, yi=poly[i].y+oy, xj=poly[j].x+ox, yj=poly[j].y+oy;
+    if ((yi>py) !== (yj>py) && px < (xj-xi)*(py-yi)/(yj-yi)+xi) ins = !ins;
+  }
+  return ins;
+}
+
+// True polygon-polygon overlap test (both translated by their offsets)
+function polysOverlap(pA, oxA, oyA, pB, oxB, oyB) {
+  const n=pA.length, m=pB.length;
+  // Edge vs edge
+  for (let i=0; i<n; i++) {
+    const i2=(i+1)%n, ax=pA[i].x+oxA, ay=pA[i].y+oyA, bx=pA[i2].x+oxA, by=pA[i2].y+oyA;
+    for (let j=0; j<m; j++) {
+      const j2=(j+1)%m;
+      if (segsIntersect(ax,ay,bx,by, pB[j].x+oxB,pB[j].y+oyB, pB[j2].x+oxB,pB[j2].y+oyB)) return true;
+    }
+  }
+  // Containment (one polygon entirely inside the other)
+  if (ptInPolyOff(pA[0].x+oxA, pA[0].y+oyA, pB, oxB, oyB)) return true;
+  if (ptInPolyOff(pB[0].x+oxB, pB[0].y+oyB, pA, oxA, oyA)) return true;
+  return false;
+}
+
+// ── NFP-Aware Nesting ─────────────────────────────────────────────────────────
+//
+// Placement strategy (vertex-based NFP approximation):
+//   • For each part (sorted largest-first), try 0° and 90° rotations.
+//   • Generate candidate (dx,dy) positions from:
+//       – Sheet edge contacts (gap from each edge)
+//       – Bounding-box contacts with every placed part (+ gap)
+//       – Vertex-vertex alignments with every placed part (enables interlocking)
+//   • Sort candidates by corner-bias score; first collision-free position wins.
+//   • Collision detection uses true polygon geometry (edge intersections + containment).
+//
 function nestParts(parts, SW, SH, gap, bias) {
   const items = [];
-  parts.forEach(p => { for (let q=0;q<p.qty;q++) items.push({...p}); });
+  parts.forEach(p => { for (let q=0; q<p.qty; q++) items.push({...p}); });
   items.sort((a,b) => b.w*b.h - a.w*a.h);
-  const flipX = bias==='top-right'    || bias==='bottom-right';
-  const flipY = bias==='bottom-left'  || bias==='bottom-right';
-  const W = SW-gap*2, H = SH-gap*2;
-  const spaces = [{x:0,y:0,w:W,h:H}];
+
+  const flipX = bias==='top-right'   || bias==='bottom-right';
+  const flipY = bias==='bottom-left' || bias==='bottom-right';
+
   const placed=[], unplaced=[];
+  const placedPolys = []; // {poly, ox, oy, fw, fh} in sheet-space
+
   for (const item of items) {
-    let bi=-1, bs=Infinity, br=false;
-    spaces.forEach((s,si) => {
-      const tryFit = (fw, fh, rot) => {
-        if (fw+gap > s.w || fh+gap > s.h) return;
-        const waste = s.w*s.h - (fw+gap)*(fh+gap);
-        const yPref = flipY ? H-s.y : s.y;
-        const xPref = flipX ? W-s.x : s.x;
-        const sc = waste*1000000 + yPref*100 + xPref;
-        if (sc < bs) { bs=sc; bi=si; br=rot; }
-      };
-      tryFit(item.w, item.h, false);
-      tryFit(item.h, item.w, true);
-    });
-    if (bi===-1) { unplaced.push(item); continue; }
-    const s=spaces[bi];
-    const fw=br?item.h:item.w, fh=br?item.w:item.h;
-    const px=flipX?(W-s.x-fw)+gap:s.x+gap;
-    const py=flipY?(H-s.y-fh)+gap:s.y+gap;
-    placed.push({...item,px,py,fw,fh,rotated:br});
-    const dw=s.w-fw-gap, dh=s.h-fh-gap;
-    let right, bottom;
-    if (dw > dh) {
-      right  = {x:s.x+fw+gap, y:s.y,        w:dw,    h:s.h   };
-      bottom = {x:s.x,        y:s.y+fh+gap, w:fw+gap, h:dh   };
-    } else {
-      right  = {x:s.x+fw+gap, y:s.y,        w:dw,    h:fh+gap};
-      bottom = {x:s.x,        y:s.y+fh+gap, w:s.w,   h:dh    };
+    let basePoly = getPartPolygon(item.paths);
+    if (!basePoly || basePoly.length < 3)
+      basePoly = [{x:0,y:0},{x:item.w,y:0},{x:item.w,y:item.h},{x:0,y:item.h}];
+
+    let best = null;
+
+    for (const rotated of [false, true]) {
+      const poly = rotated ? rotatePoly90(basePoly, item.w, item.h) : basePoly.map(pt=>({...pt}));
+      const fw   = rotated ? item.h : item.w;
+      const fh   = rotated ? item.w : item.h;
+      if (fw + gap*2 > SW || fh + gap*2 > SH) continue;
+
+      // Polygon bounding box (normalised paths → expected [0,fw]×[0,fh])
+      let px0=Infinity, py0=Infinity, px1=-Infinity, py1=-Infinity;
+      for (const pt of poly) { px0=Math.min(px0,pt.x); py0=Math.min(py0,pt.y); px1=Math.max(px1,pt.x); py1=Math.max(py1,pt.y); }
+
+      const minDX = gap - px0,  maxDX = SW - px1 - gap;
+      const minDY = gap - py0,  maxDY = SH - py1 - gap;
+      if (minDX > maxDX + 0.01 || minDY > maxDY + 0.01) continue;
+
+      // Build candidate position sets
+      const cxSet = new Set([minDX, maxDX]);
+      const cySet = new Set([minDY, maxDY]);
+
+      for (const pd of placedPolys) {
+        // Bounding-box gap contacts (ensures gap between outlines)
+        cxSet.add(pd.ox + pd.fw + gap - px0);  // new part right of placed
+        cxSet.add(pd.ox - px1 - gap);           // new part left of placed
+        cySet.add(pd.oy + pd.fh + gap - py0);  // new part below placed
+        cySet.add(pd.oy - py1 - gap);           // new part above placed
+
+        // Vertex–vertex alignments (core NFP insight: lets parts interlock)
+        for (const qpt of pd.poly) {
+          for (const ppt of poly) {
+            const cx = pd.ox + qpt.x - ppt.x;
+            const cy = pd.oy + qpt.y - ppt.y;
+            if (cx >= minDX-0.5 && cx <= maxDX+0.5) cxSet.add(cx);
+            if (cy >= minDY-0.5 && cy <= maxDY+0.5) cySet.add(cy);
+          }
+        }
+      }
+
+      // Filter to valid range
+      const cxArr = [...cxSet].filter(x => x >= minDX-0.01 && x <= maxDX+0.01);
+      const cyArr = [...cySet].filter(y => y >= minDY-0.01 && y <= maxDY+0.01);
+
+      // Build scored candidates and sort (ascending = best first)
+      const cands = [];
+      for (const dy of cyArr) {
+        for (const dx of cxArr) {
+          const bx = flipX ? SW-dx-fw : dx;
+          const by = flipY ? SH-dy-fh : dy;
+          cands.push({dx, dy, rotated, fw, fh, poly, score: by*(SW+1)+bx});
+        }
+      }
+      cands.sort((a,b) => a.score - b.score);
+      if (cands.length > 3000) cands.length = 3000; // cap for performance
+
+      // Try in score order — first collision-free position wins
+      for (const cand of cands) {
+        if (best && cand.score >= best.score) break; // remaining can't improve best
+
+        // Quick bbox pre-check before expensive polygon test
+        let ok = true;
+        for (const pd of placedPolys) {
+          if (cand.dx+px1 < pd.ox-0.01 || cand.dx+px0 > pd.ox+pd.fw+0.01 ||
+              cand.dy+py1 < pd.oy-0.01 || cand.dy+py0 > pd.oy+pd.fh+0.01) continue; // no bbox overlap
+          if (polysOverlap(cand.poly, cand.dx, cand.dy, pd.poly, pd.ox, pd.oy)) { ok=false; break; }
+        }
+        if (ok) { best = cand; break; }
+      }
     }
-    spaces.splice(bi,1);
-    if(right.w>1&&right.h>1)  spaces.push(right);
-    if(bottom.w>1&&bottom.h>1)spaces.push(bottom);
+
+    if (best) {
+      placed.push({...item, px:best.dx, py:best.dy, fw:best.fw, fh:best.fh, rotated:best.rotated});
+      placedPolys.push({poly:best.poly, ox:best.dx, oy:best.dy, fw:best.fw, fh:best.fh});
+    } else {
+      unplaced.push(item);
+    }
   }
-  return {placed,unplaced};
+  return {placed, unplaced};
 }
 
 // ── DXF Export ────────────────────────────────────────────────────────────────
@@ -623,11 +772,16 @@ function renderPreview() {
 
   for (const item of state.nested.placed) {
     const g=svgEl('g',{});
-    g.appendChild(svgEl('rect',{
-      x:item.px*sc+PAD,y:item.py*sc+PAD,
-      width:item.fw*sc,height:item.fh*sc,
-      fill:item.fill,stroke:item.stroke,'stroke-width':'1','fill-opacity':'0.8'
-    }));
+    // Draw filled polygon (actual part shape, not bounding box)
+    const rawPoly = getPartPolygon(item.paths);
+    if (rawPoly && rawPoly.length >= 3) {
+      const poly = item.rotated ? rotatePoly90(rawPoly, item.w, item.h) : rawPoly;
+      const pts = poly.map(pt => `${(pt.x+item.px)*sc+PAD},${(pt.y+item.py)*sc+PAD}`).join(' ');
+      g.appendChild(svgEl('polygon',{points:pts,fill:item.fill,stroke:item.stroke,'stroke-width':'1','fill-opacity':'0.75'}));
+    } else {
+      // Fallback: bounding box rect
+      g.appendChild(svgEl('rect',{x:item.px*sc+PAD,y:item.py*sc+PAD,width:item.fw*sc,height:item.fh*sc,fill:item.fill,stroke:item.stroke,'stroke-width':'1','fill-opacity':'0.75'}));
+    }
     renderPaths(item.paths,item.w,item.h,item.px+PAD/sc,item.py+PAD/sc,sc,item.rotated,item.stroke,g);
     svg.appendChild(g);
   }
