@@ -475,8 +475,20 @@ function ptInPolyOff(px, py, poly, ox, oy) {
   return ins;
 }
 
-// True polygon-polygon overlap test (both translated by their offsets)
+// True polygon-polygon overlap test (both translated by their offsets).
+//
+// IMPORTANT — why we use centroid for containment instead of poly[0]:
+//   If two identical polygons sit at the same offset (duplicate parts placed on
+//   top of each other), all their edges are collinear so segsIntersect returns
+//   false for every pair.  poly[0] is then a *boundary point* of the other
+//   polygon, and ray-casting is undefined/false for boundary points.
+//   The centroid is strictly interior (for convex polygons, always; for concave,
+//   almost always), so ptInPolyOff reliably returns true when one polygon
+//   completely contains or coincides with the other.
 function polysOverlap(pA, oxA, oyA, pB, oxB, oyB) {
+  // Fast path: same (or nearly same) position → must overlap
+  if (Math.abs(oxA-oxB) < 0.5 && Math.abs(oyA-oyB) < 0.5) return true;
+
   const n=pA.length, m=pB.length;
   // Edge vs edge
   for (let i=0; i<n; i++) {
@@ -486,9 +498,14 @@ function polysOverlap(pA, oxA, oyA, pB, oxB, oyB) {
       if (segsIntersect(ax,ay,bx,by, pB[j].x+oxB,pB[j].y+oyB, pB[j2].x+oxB,pB[j2].y+oyB)) return true;
     }
   }
-  // Containment (one polygon entirely inside the other)
-  if (ptInPolyOff(pA[0].x+oxA, pA[0].y+oyA, pB, oxB, oyB)) return true;
-  if (ptInPolyOff(pB[0].x+oxB, pB[0].y+oyB, pA, oxA, oyA)) return true;
+  // Containment using polygon centroid (strictly interior — avoids boundary ambiguity)
+  let cxA=0,cyA=0, cxB=0,cyB=0;
+  for (const pt of pA) { cxA+=pt.x; cyA+=pt.y; }
+  for (const pt of pB) { cxB+=pt.x; cyB+=pt.y; }
+  cxA=cxA/n+oxA; cyA=cyA/n+oyA;
+  cxB=cxB/m+oxB; cyB=cyB/m+oyB;
+  if (ptInPolyOff(cxA, cyA, pB, oxB, oyB)) return true;
+  if (ptInPolyOff(cxB, cyB, pA, oxA, oyA)) return true;
   return false;
 }
 
